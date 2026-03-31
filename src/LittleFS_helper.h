@@ -40,7 +40,7 @@ const char HELPER[] PROGMEM = R"(<form method="POST" action="/upload" enctype="m
 <input type="file" name="[]" multiple><button>Upload</button></form>Lade die fs.html hoch.)";
 bool uploadRejected = false;
 
-void sendResponce() {
+void sendResponse() {
   server.sendHeader("Location", "fs.html");
   server.send(303, "message/http");
 }
@@ -51,13 +51,14 @@ void sendUploadResponse() {
     server.send(400, "text/plain", "Invalid upload path");
     return;
   }
-  sendResponce();
+  sendResponse();
 }
 
 const String formatBytes(size_t const& bytes) {                                        // lesbare Anzeige der Speichergrößen
   return bytes < 1024 ? static_cast<String>(bytes) + " Byte" : bytes < 1048576 ? static_cast<String>(bytes / 1024.0) + " KB" : static_cast<String>(bytes / 1048576.0) + " MB";
 }
 
+// Validate LittleFS paths before file access so requests stay inside the mounted filesystem.
 bool isSafeLittleFSPath(const String &path) {
   return path.length() > 0 &&
          path.startsWith("/") &&
@@ -66,6 +67,7 @@ bool isSafeLittleFSPath(const String &path) {
          path.indexOf("//") == -1;
 }
 
+// Normalize directory arguments to a rooted LittleFS path without trailing slashes.
 String normalizeLittleFSDirectory(String path) {
   if (path.length() == 0) {
     return "/";
@@ -79,11 +81,22 @@ String normalizeLittleFSDirectory(String path) {
   return path;
 }
 
+// Accept upload names only when they cannot inject path separators or traversal sequences.
 bool isSafeUploadName(const String &filename) {
   return filename.length() > 0 &&
          filename.indexOf('/') == -1 &&
          filename.indexOf('\\') == -1 &&
          filename.indexOf("..") == -1;
+}
+
+// Replace folder name characters that are disallowed by the filesystem UI with underscores.
+String sanitizeFolderName(String folderName) {
+  for (auto& ch : folderName) {
+    if (ch == '"' || ch == '%' || ch == '&' || ch == '/' || ch == ':' || ch == ';' || ch == '\\') {
+      ch = '_';
+    }
+  }
+  return folderName;
 }
 
 bool handleList() {                                                                    // Senden aller Daten an den Client
@@ -170,10 +183,10 @@ String getContentType(String filename){
 
 bool handleFile(String &&path) {
   if (server.hasArg("new")) {
-    String folderName {server.arg("new")};
-    for (auto& c : {34, 37, 38, 47, 58, 59, 92}) for (auto& e : folderName) if (e == c) e = 95;    // Ersetzen der nicht erlaubten Zeichen
-    if (folderName.length() > 0 && folderName.indexOf('/') == -1 && folderName.indexOf('\\') == -1 && folderName.indexOf("..") == -1) {
-      LittleFS.mkdir("/" + folderName);
+    String folderName {sanitizeFolderName(server.arg("new"))};
+    String folderPath = "/" + folderName;
+    if (isSafeUploadName(folderName) && isSafeLittleFSPath(folderPath)) {
+      LittleFS.mkdir(folderPath);
     }
   }
   if (server.hasArg("sort")) return handleList();
@@ -184,7 +197,7 @@ bool handleFile(String &&path) {
       return true;
     }
     deleteRecursive(deletePath);
-    sendResponce();
+    sendResponse();
     return true;
   }
 
@@ -210,7 +223,7 @@ bool handleFile(String &&path) {
     return true;
   }
   if (path.endsWith("/")) path += "index.html";
-  if (path == "/spiffs.html") sendResponce(); // Vorrübergehend für den Admin Tab
+  if (path == "/spiffs.html") sendResponse(); // Vorrübergehend für den Admin Tab
   return LittleFS.exists(path) ? ({File f = LittleFS.open(path, "r"); server.streamFile(f, getContentType(path)); f.close(); true;}) : false;
 }
 
@@ -219,16 +232,17 @@ void handleUpload() {                                                           
   HTTPUpload& upload = server.upload();
   if (upload.status == UPLOAD_FILE_START) {
     uploadRejected = false;
-    if (upload.filename.length() > 31) {  // Dateinamen kürzen
-      upload.filename = upload.filename.substring(upload.filename.length() - 31, upload.filename.length());
-    }
-    String uploadDir = normalizeLittleFSDirectory(server.arg("f"));
+    String uploadDir = normalizeLittleFSDirectory(server.arg("f"));  // fs.html posts uploads to /upload?f=<directory>
     String decodedFilename = server.urlDecode(upload.filename);
+    if (decodedFilename.length() > 31) {  // Dateinamen kürzen
+      decodedFilename = decodedFilename.substring(decodedFilename.length() - 31, decodedFilename.length());
+    }
     if (!isSafeLittleFSPath(uploadDir) || !isSafeUploadName(decodedFilename)) {
       uploadRejected = true;
+      Serial.printf("Rejected upload path: %s/%s\n", uploadDir.c_str(), decodedFilename.c_str());
       return;
     }
-    printf(PSTR("handleFileUpload Name: /%s\n"), upload.filename.c_str());
+    printf(PSTR("handleFileUpload Name: /%s\n"), decodedFilename.c_str());
     String uploadPath = uploadDir == "/" ? "/" + decodedFilename : uploadDir + "/" + decodedFilename;
     fsUploadFile = LittleFS.open(uploadPath, "w");
     if (!fsUploadFile) {
@@ -252,7 +266,7 @@ void handleUpload() {                                                           
 
 void formatFS() {                                                                      // Formatiert das Filesystem
   LittleFS.format();
-  sendResponce();
+  sendResponse();
 }
 
 void setupFS() {                                                                       // Funktionsaufruf "setupFS();" muss im Setup eingebunden werden

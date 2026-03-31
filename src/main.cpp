@@ -236,6 +236,12 @@ String split(String s, char parser, int index)
   return rs;
 }
 
+/**
+ * @brief Check whether a string contains only decimal digits.
+ *
+ * @param value string to validate
+ * @return true when the string is non-empty and contains only 0-9
+ */
 bool isUnsignedNumber(const String &value)
 {
   if (value.length() == 0)
@@ -254,6 +260,15 @@ bool isUnsignedNumber(const String &value)
   return true;
 }
 
+/**
+ * @brief Parse a bounded integer without allowing malformed input or overflow.
+ *
+ * @param value string to parse
+ * @param minValue minimum allowed value
+ * @param maxValue maximum allowed value
+ * @param parsedValue parsed result on success
+ * @return true when parsing succeeds and the value is within bounds
+ */
 bool tryParseBoundedInt(const String &value, int minValue, int maxValue, int &parsedValue)
 {
   if (!isUnsignedNumber(value))
@@ -261,13 +276,25 @@ bool tryParseBoundedInt(const String &value, int minValue, int maxValue, int &pa
     return false;
   }
 
-  long candidate = value.toInt();
-  if (candidate < minValue || candidate > maxValue)
+  const long maxCandidate = static_cast<long>(maxValue);
+  long candidate = 0;
+  for (size_t i = 0; i < value.length(); i++)
+  {
+    int digit = value[i] - '0';
+    // Prevent overflow before multiplying the current value by 10 and adding the next digit.
+    if (candidate > (maxCandidate - digit) / 10)
+    {
+      return false;
+    }
+    candidate = (candidate * 10) + digit;
+  }
+
+  if (candidate < minValue || candidate > maxCandidate)
   {
     return false;
   }
 
-  parsedValue = candidate;
+  parsedValue = static_cast<int>(candidate);
   return true;
 }
 
