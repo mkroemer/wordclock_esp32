@@ -236,6 +236,41 @@ String split(String s, char parser, int index)
   return rs;
 }
 
+bool isUnsignedNumber(const String &value)
+{
+  if (value.length() == 0)
+  {
+    return false;
+  }
+
+  for (size_t i = 0; i < value.length(); i++)
+  {
+    if (!isDigit(value[i]))
+    {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool tryParseBoundedInt(const String &value, int minValue, int maxValue, int &parsedValue)
+{
+  if (!isUnsignedNumber(value))
+  {
+    return false;
+  }
+
+  long candidate = value.toInt();
+  if (candidate < minValue || candidate > maxValue)
+  {
+    return false;
+  }
+
+  parsedValue = candidate;
+  return true;
+}
+
 /**
  * @brief Set the nightmode state
  *
@@ -475,6 +510,13 @@ void handleButton()
  */
 void handleCommand()
 {
+  if (server.args() == 0)
+  {
+    logger.logString("Rejected command without arguments");
+    server.send(400, "text/plain", "Missing command");
+    return;
+  }
+
   // receive command and handle accordingly
   for (uint8_t i = 0; i < server.args(); i++)
   {
@@ -489,13 +531,24 @@ void handleCommand()
     String redstr = split(colorstr, '-', 0);
     String greenstr = split(colorstr, '-', 1);
     String bluestr = split(colorstr, '-', 2);
+    int red = 0;
+    int green = 0;
+    int blue = 0;
+    if (!tryParseBoundedInt(redstr, 0, 255, red) ||
+        !tryParseBoundedInt(greenstr, 0, 255, green) ||
+        !tryParseBoundedInt(bluestr, 0, 255, blue))
+    {
+      logger.logString("Rejected invalid LED color command: " + colorstr);
+      server.send(400, "text/plain", "Invalid LED color");
+      return;
+    }
     logger.logString(colorstr);
-    logger.logString("r: " + String(redstr.toInt()));
-    logger.logString("g: " + String(greenstr.toInt()));
-    logger.logString("b: " + String(bluestr.toInt()));
+    logger.logString("r: " + String(red));
+    logger.logString("g: " + String(green));
+    logger.logString("b: " + String(blue));
     // set new main color
-    maincolor_clock = LEDMatrix::Color24bit(redstr.toInt(), greenstr.toInt(), bluestr.toInt());
-    secondcolor_clock = LEDMatrix::Color24bit(255 - redstr.toInt(), 255 - greenstr.toInt(), 255 - bluestr.toInt());
+    maincolor_clock = LEDMatrix::Color24bit(red, green, blue);
+    secondcolor_clock = LEDMatrix::Color24bit(255 - red, 255 - green, 255 - blue);
     if (secondcolor_clock == LEDMatrix::Color24bit(0, 0, 0))
     {
       maincolor_clock = LEDMatrix::Color24bit(125, 125, 125);
@@ -547,12 +600,27 @@ void handleCommand()
   else if (server.argName(0) == "setting")
   {
     String timestr = server.arg(0) + "-";
+    int parsedStartHour = 0;
+    int parsedStartMin = 0;
+    int parsedEndHour = 0;
+    int parsedEndMin = 0;
+    int parsedBrightness = 0;
+    if (!tryParseBoundedInt(split(timestr, '-', 0), 0, 23, parsedStartHour) ||
+        !tryParseBoundedInt(split(timestr, '-', 1), 0, 59, parsedStartMin) ||
+        !tryParseBoundedInt(split(timestr, '-', 2), 0, 23, parsedEndHour) ||
+        !tryParseBoundedInt(split(timestr, '-', 3), 0, 59, parsedEndMin) ||
+        !tryParseBoundedInt(split(timestr, '-', 4), 0, 255, parsedBrightness))
+    {
+      logger.logString("Rejected invalid nightmode setting command: " + timestr);
+      server.send(400, "text/plain", "Invalid settings");
+      return;
+    }
     logger.logString("Nightmode setting change via Webserver to: " + timestr);
-    nightModeStartHour = split(timestr, '-', 0).toInt();
-    nightModeStartMin = split(timestr, '-', 1).toInt();
-    nightModeEndHour = split(timestr, '-', 2).toInt();
-    nightModeEndMin = split(timestr, '-', 3).toInt();
-    brightness = split(timestr, '-', 4).toInt();
+    nightModeStartHour = parsedStartHour;
+    nightModeStartMin = parsedStartMin;
+    nightModeEndHour = parsedEndHour;
+    nightModeEndMin = parsedEndMin;
+    brightness = parsedBrightness;
     writeIntEEPROM(ADR_NM_START_H, nightModeStartHour);
     writeIntEEPROM(ADR_NM_START_M, nightModeStartMin);
     writeIntEEPROM(ADR_NM_END_H, nightModeEndHour);
@@ -652,6 +720,12 @@ void handleCommand()
  */
 void handleDataRequest()
 {
+  if (server.args() == 0)
+  {
+    server.send(400, "text/plain", "Missing key");
+    return;
+  }
+
   // receive data request and handle accordingly
   for (uint8_t i = 0; i < server.args(); i++)
   {
@@ -895,11 +969,16 @@ void setup()
   nightModeStartMin = readIntEEPROM(ADR_NM_START_M);
   nightModeEndHour = readIntEEPROM(ADR_NM_END_H);
   nightModeEndMin = readIntEEPROM(ADR_NM_END_M);
+  nightModeStartHour = constrain(nightModeStartHour, 0, 23);
+  nightModeStartMin = constrain(nightModeStartMin, 0, 59);
+  nightModeEndHour = constrain(nightModeEndHour, 0, 23);
+  nightModeEndMin = constrain(nightModeEndMin, 0, 59);
   logger.logString("Nightmode starts at: " + String(nightModeStartHour) + ":" + String(nightModeStartMin));
   logger.logString("Nightmode ends at: " + String(nightModeEndHour) + ":" + String(nightModeEndMin));
 
   // Read brightness setting from EEPROM
   brightness = readIntEEPROM(ADR_BRIGHTNESS);
+  brightness = constrain(brightness, 0, 255);
   logger.logString("Brightness: " + String(brightness));
   ledmatrix.setBrightness(brightness);
 
